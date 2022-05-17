@@ -15,7 +15,7 @@ from collections import Counter
 def readMol(smiles):
     try:
         targetMol = Chem.MolFromSmiles(smiles)
-        RemoveStereochemistry(targetMol)
+        #RemoveStereochemistry(targetMol)
     except:
         if "[nH]" in smiles:
             modifiedSmiles = smiles.replace("[nH]", "n", 1)
@@ -33,7 +33,7 @@ def readMol(smiles):
                 try:
                     modifiedSmiles = smiles.replace("[nH]", "n")
                     targetMol = Chem.MolFromSmiles(modifiedSmiles)
-                    RemoveStereochemistry(targetMol)
+                    #RemoveStereochemistry(targetMol)
                 except:
                     print(smiles + " was not processed by rdkit")
             else:
@@ -50,13 +50,13 @@ def readMol(smiles):
                 modifiedSmiles = smiles
             try:
                 targetMol = Chem.MolFromSmiles(modifiedSmiles)
-                RemoveStereochemistry(targetMol)
+                #RemoveStereochemistry(targetMol)
             except:
                 if "[nH]" in modifiedSmiles:
                     try:
                         modifiedSmiles = smiles.replace("[nH]", "n")
                         targetMol = Chem.MolFromSmiles(modifiedSmiles)
-                        RemoveStereochemistry(targetMol)
+                        #RemoveStereochemistry(targetMol)
                     except:
                         print(smiles + " was not processed by rdkit")
                 else:

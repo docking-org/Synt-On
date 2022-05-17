@@ -1,0 +1,12 @@
+{
+    "configurations": [
+    {
+        "name": "Python: Bulk with flags",
+        "type": "python",
+        "request": "launch",
+        "program": "${workspaceFolder}/SyntOn_BulkFragmentationEnumerationAndAnaloguesDesign.py",
+        "cwd": "${workspaceFolder}/TEST/CS-SYNTHONES",
+	"args": ["-i", "ligand.smi", "--SynthLibrary", "20K-cs-synth.smi", "--nCores", "5", "--simTh", "0.5",  "--analoguesLibGen"]
+}
+]
+}

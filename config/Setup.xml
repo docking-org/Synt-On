@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <!--  -->
-<SynthIfragmenation_setup>
+<SyntOnfragmenation_setup>
     <AvailableReactions>
         <!-- Amides & Ureas -->
         <R1 name="N-acylation">
@@ -21,7 +21,8 @@
             <R1.4 name="Amine acylation by isocyanates or analogues"
                 SMARTS="[#7;A;+0;$([#7;D2][#6]):1]!@[#6;A;$([#6]=[#8,#16]);!$([#6]([#7;D3])(=[#8,#16])[#7;D3]):3](!@[#7;A;+0;$([#7;D3]([#6])[#6]),$([#7;D2][#6]):2])>>[#7:1]-[#6:3](-[*]).[#7:2]-[*]"
                 Labels="*C->C:10,*[11C]->11C:10,*[11CH]->11C:10,*[11CH2]->11C:10,*[11CH3]->11C:10,*[13C]->13C:10,*[13CH]->13C:10,*[14C]->14C:10,*[14CH]->14C:10,*[14CH2]->14C:10,*[14CH3]->14C:10;*N->N:20,*[15N]->15N:20,*[15NH]->15N:20,*[15NH2]->15N:20"
-                ReconstructionReaction="[#7;A;+0;$([#7;D2][#6]):1][#6;A;$([#6]=[#8,#16]):2][#23:4].[#7;A;+0;$([#7;D2][#6]),$([#7;D3]([#6])[#6]):3][#74:5]>>[#7:1]-[#6:2]-[#7:3]"> </R1.4>
+                ReconstructionReaction="[#7;A;+0;$([#7;D2][#6]):1][#6;A;$([#6]=[#8,#16]):2][#23:4].[#7;A;+0;$([#7;D2][#6]),$([#7;D3]([#6])[#6]):3][#74:5]>>[#7:1]-[#6:2]-[#7:3]">
+                </R1.4>
         </R1>
         <!-- Esters -->
         <R2 name="O-acylation">
@@ -216,4 +217,4 @@
         one by one; <!-- input: customized list of sorted reactions; reaction applied in the specified order; each bond can be cut only using one reaction -->
     </AvailableModesOfFragmentation>
 
-</SynthIfragmenation_setup>
+</SyntOnfragmenation_setup>

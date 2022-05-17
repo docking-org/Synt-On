@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import xml.etree.ElementTree as ET
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdChemReactions as Reactions
@@ -8,6 +9,9 @@ from rdkit.Chem.rdMolDescriptors import CalcNumRings
 from rdkit.Chem.Descriptors import *
 from rdkit.Chem.rdMolDescriptors import *
 from rdkit.Chem.Crippen import MolLogP
+from rdkit import RDLogger
+lg = RDLogger.logger()
+lg.setLevel(RDLogger.CRITICAL) #comment out to enable rdkit logs
 import datetime, os, time, random, re, resource, sys
 from multiprocessing import Process, Queue
 from concurrent.futures import ProcessPoolExecutor
@@ -19,7 +23,7 @@ from src.UsefulFunctions import *
 from src.SyntOn import *
 
 
-def main(inp, SynthLibrary, outDir, simTh, strictAvailabilityMode, nCores=-1, analoguesLibGen=False,
+def main(inp, inp2, SynthLibrary, outDir, simTh, strictAvailabilityMode, nCores=-1, analoguesLibGen=False,
          Ro2Filtration=False, fragmentationMode="use_all", reactionsToWorkWith = "R1-R13", MaxNumberOfStages=5,
          maxNumberOfReactionCentersPerFragment=3, desiredNumberOfNewMols = 1000, enumerationMode=False, MWupperTh=1000,
          MWlowerTh=100):
@@ -53,8 +57,13 @@ def main(inp, SynthLibrary, outDir, simTh, strictAvailabilityMode, nCores=-1, an
         nCores = args.nCores
         finalLog = []
         with ProcessPoolExecutor(max_workers=nCores) as executor:
+            # try:
             for out in executor.map(fixed_analogsGenerationFunction, Smiles_molNumb_List):
+                print("++++++out", out)
                 finalLog.append(out)
+                print(finalLog)
+            # except:
+                # pass
         print(finalLog)
     elif not enumerationMode:
         outOnePath = open(inp + "_out", "w")
@@ -116,18 +125,38 @@ def main(inp, SynthLibrary, outDir, simTh, strictAvailabilityMode, nCores=-1, an
         outOnePath.close()
         outAllSynthons.close()
         return "Finished"
+        # That's what we need for enumeration!
     else:
-        reactionForReconstruction = SyntOnfragmentor.getReactionForReconstruction()
-        synthons = []
+        reactionForReconstruction, reactionIds = SyntOnfragmentor.getReactionForReconstruction()
+        
+        synthons = {}
+        synthons2 = {}
         for line in open(inp):
             sline = line.strip()
             if sline and "*" not in sline:
-                synthons.append(sline.split()[0])
-        enumerator = enumeration(outDir=outDir, Synthons=list(set(synthons)),
+                synthons[sline.split()[0]] = sline.split()[1]
+        
+        #print("===Synthons", synthons)
+        for line in open(inp2):
+            sline = line.strip()
+            if sline and "*" not in sline:
+                synthons2[sline.split()[0]] = sline.split()[1]
+        #print("===Synthons2", synthons2)
+        
+        # making sure the file is not overwritten. using mode='w' not working well with multiple threads
+        try:
+            os.remove(os.path.join(outDir, "FinalOut_allEnumeratedCompounds_DuplicatesCanBePresent.smi"))
+        except OSError:
+            pass
+        
+        enumerator = enumeration(outDir=outDir, Synthons=synthons, Synthons2=synthons2, reactionIds = reactionIds,
                                  reactionSMARTS=reactionForReconstruction, maxNumberOfReactedSynthons=MaxNumberOfStages+1,
                                  MWupperTh=MWupperTh, MWlowerTh = MWlowerTh,
                                  desiredNumberOfNewMols = desiredNumberOfNewMols, nCores = nCores)
         reconstructedMols = enumerator.getReconstructedMols(allowedToRunSubprocesses=True)
+        
+        
+            
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Compound fragmentaitiona and analogues generation.",
@@ -139,8 +168,9 @@ if __name__ == '__main__':
                                             "                                    Kyiv National Taras Shevchenko University\n"
                                             "2021 Strasbourg, Kiev",
                                      prog="SyntOn_BulkFragmentationEnumerationAndAnaloguesDesign", formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("-i", "--input", type=str, help="input file")
-    parser.add_argument("-oD", "--outDir", type=str, help="Output directory to write analogues.")
+    parser.add_argument("-i", "--input", type=str, help="first synthon file")
+    parser.add_argument("-i2", "--input2", type=str, default=None, help="Library of second reagents available synthons. Generated from avaialable BBs using SyntOn_BBsBulkClassificationAndSynthonization.py")
+    parser.add_argument("-oD", "--outDir", type=str, default="ENUMERATED", help="Output directory to write analogues.")
     parser.add_argument("--SynthLibrary", type=str, default=None, help="Library of available synthons. Generated from avaialable BBs using SyntOn_BBsBulkClassificationAndSynthonization.py")
     parser.add_argument("--nCores", default=-1, type=int, help="Number of CPUs available for parallelization.")
     parser.add_argument("--simTh", default=-1, type=float, help="Similarity threshold for BB analogues search. "
@@ -173,7 +203,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     if args.nCores == -1 or args.analoguesLibGen or args.enumerationMode:
-        main(args.input, args.SynthLibrary, args.outDir, args.simTh, args.strictAvailabilityMode, args.nCores,
+        main(args.input, args.input2, args.SynthLibrary, args.outDir, args.simTh, args.strictAvailabilityMode, args.nCores,
              args.analoguesLibGen, args.Ro2Filtration, fragmentationMode=args.fragmentationMode,
              reactionsToWorkWith = args.reactionsToWorkWith,
              MaxNumberOfStages=args.MaxNumberOfStages,

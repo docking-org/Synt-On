@@ -1,0 +1,1 @@
+python /nfs/soft2/SyntOn/SyntOn_BulkFragmentationEnumerationAndAnaloguesDesign.py -i ligand.smi --SynthLibrary all_synthones.smi --nCores 5 --simTh 0.5 --MaxNumberOfStages 1 --analoguesLibGen -oD 1STAGE --maxNumberOfReactionCentersPerFragment 1

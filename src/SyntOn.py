@@ -7,6 +7,7 @@ from rdkit.Chem.rdMolDescriptors import CalcNumRings
 from rdkit.Chem.Descriptors import *
 from rdkit.Chem.rdMolDescriptors import *
 from rdkit.Chem.Crippen import MolLogP
+import tempfile
 import datetime, os, time, random, re, resource, sys
 from multiprocessing import Process, Queue
 from collections import Counter
@@ -35,12 +36,17 @@ class synthon:
             self.syntheticPathway.extend(syntheticPathway)
         self.correspondingBB = None
         self.AtomNumbers = 0
+        # this dict stores SMILES:ID for analogs for each BB
         self.bbAnalogues = {}
+        # this dict stores SMILES:Tanimoto coeff for analogs for each BB
+        self.bbAnaloguesTc = {}
         self.bivalentN = False
         self.SynthLibProvided = SynthLibProvided
         self.rIdsToGetIt = []
 
     def searchForSynthonAnalogues(self, synthLib: dict, simTh=-1):
+        # this dict is to access self.bbAnalogues dict outside of synthon class. Seems that this class is not initiated at all.
+        globBbAnalogues = {}
         posAnaloguesScreeningAtomsAllowed = ["C", "F", "N", "O"]
         refMol = Chem.MolFromSmiles(self.smiles)
         refMol.UpdatePropertyCache()
@@ -49,43 +55,62 @@ class synthon:
         queryFP = AllChem.GetMorganFingerprintAsBitVect(refMol, radius=2, nBits=2048)
         refMarksVallences = "+".join(sorted([atom.GetSymbol() + ":" + str(atom.GetTotalDegree()) for atom in refMol.GetAtoms() if atom.GetAtomMapNum() != 0]))
         for synth in synthLib:
+            # if a BB similarity with the target one is >= simTh, accept it immediately
             if self.marks == synthLib[synth]["marks"] and synth != self.smiles and refMarksVallences == synthLib[synth]["marksVallences"]:
-                if simTh != -1 and DataStructs.TanimotoSimilarity(queryFP,synthLib[synth]["fp_b"]) >= simTh :
+                curr_Tc = DataStructs.TanimotoSimilarity(queryFP,synthLib[synth]["fp_b"])
+                # print(curr_Tc)
+                if simTh != -1 and curr_Tc >= simTh :
                     self.bbAnalogues[synth] = synthLib[synth]["BBs"]
+                    self.bbAnaloguesTc[synth] = curr_Tc
+                # if Tc of a BB and the target synthon is < simTh, then compare
+                # a) a list of heavy atoms in each compd, 
+                # b) number of atoms +/-2
+                # c) number of rings
+                # and add synthons with the similar parameters to the list. Gives a low Morgan Tc for 
+                # the product compds though.
                 else:
-                    if self.AtomNumbers == 0:
-                        self.AtomNumbers = refMol.GetNumAtoms()
-                    if synthLib[synth]["n_atoms"] <= self.AtomNumbers + 1 and synthLib[synth]["n_atoms"] >= self.AtomNumbers - 1:
-                        refList = [i for i in self.smiles if i.isalpha() and i!="H"]
-                        qList = [i for i in synth if i.isalpha() and i!="H"]
-                        qList_refList = list((Counter(qList) - Counter(refList)).elements())
-                        refList_qList = list((Counter(refList) - Counter(qList)).elements())
-                        if synthLib[synth]["n_atoms"] == self.AtomNumbers and sorted(refList_qList + qList_refList) == ['c', 'n']:
-                            refMolRings = CalcNumRings(refMol)
-                            if synthLib[synth]["n_rings"] == refMolRings:
-                                self.bbAnalogues[synth] = synthLib[synth]["BBs"]
-                        elif not qList_refList and not refList_qList:
-                            refMolRings = CalcNumRings(refMol)
-                            if synthLib[synth]["n_rings"] == refMolRings:
-                                self.bbAnalogues[synth] = synthLib[synth]["BBs"]
-                        elif qList_refList and len(qList_refList) == 1 and qList_refList[0] in posAnaloguesScreeningAtomsAllowed:
-                            refMolRings = CalcNumRings(refMol)
-                            if synthLib[synth]["n_rings"] == refMolRings:
-                                analogMol = Chem.MolFromSmiles(synth)
-                                analogMol.UpdatePropertyCache()
-                                Chem.GetSymmSSSR(analogMol)
-                                analogMol.GetRingInfo().AtomRings()
-                                if analogMol.HasSubstructMatch(refMol):
-                                    self.bbAnalogues[synth] = synthLib[synth]["BBs"]
-                        elif refList_qList and len(refList_qList) == 0 and refList_qList[0] in posAnaloguesScreeningAtomsAllowed:
-                            refMolRings = CalcNumRings(refMol)
-                            if synthLib[synth]["n_rings"] == refMolRings:
-                                analogMol = Chem.MolFromSmiles(synth)
-                                analogMol.UpdatePropertyCache()
-                                Chem.GetSymmSSSR(analogMol)
-                                analogMol.GetRingInfo().AtomRings()
-                                if refMol.HasSubstructMatch(analogMol):
-                                    self.bbAnalogues[synth] = synthLib[synth]["BBs"]
+                    pass
+                    # if self.AtomNumbers == 0:
+                    #     self.AtomNumbers = refMol.GetNumAtoms()
+                    # if synthLib[synth]["n_atoms"] <= self.AtomNumbers + 1 and synthLib[synth]["n_atoms"] >= self.AtomNumbers - 1:
+                    #     refList = [i for i in self.smiles if i.isalpha() and i!="H"]
+                    #     qList = [i for i in synth if i.isalpha() and i!="H"]
+                    #     qList_refList = list((Counter(qList) - Counter(refList)).elements())
+                    #     refList_qList = list((Counter(refList) - Counter(qList)).elements())
+                    #     if synthLib[synth]["n_atoms"] == self.AtomNumbers and sorted(refList_qList + qList_refList) == ['c', 'n']:
+                    #         refMolRings = CalcNumRings(refMol)
+                    #         if synthLib[synth]["n_rings"] == refMolRings:
+                    #             self.bbAnalogues[synth] = synthLib[synth]["BBs"]
+                    #             self.bbAnaloguesTc[synth] = curr_Tc
+                    #     elif not qList_refList and not refList_qList:
+                    #         refMolRings = CalcNumRings(refMol)
+                    #         if synthLib[synth]["n_rings"] == refMolRings:
+                    #             self.bbAnalogues[synth] = synthLib[synth]["BBs"]
+                    #             self.bbAnaloguesTc[synth] = curr_Tc
+                    #     elif qList_refList and len(qList_refList) == 1 and qList_refList[0] in posAnaloguesScreeningAtomsAllowed:
+                    #         refMolRings = CalcNumRings(refMol)
+                    #         if synthLib[synth]["n_rings"] == refMolRings:
+                    #             analogMol = Chem.MolFromSmiles(synth)
+                    #             analogMol.UpdatePropertyCache()
+                    #             Chem.GetSymmSSSR(analogMol)
+                    #             analogMol.GetRingInfo().AtomRings()
+                    #             if analogMol.HasSubstructMatch(refMol):
+                    #                 self.bbAnalogues[synth] = synthLib[synth]["BBs"]
+                    #                 self.bbAnaloguesTc[synth] = curr_Tc
+                    #     elif refList_qList and len(refList_qList) == 0 and refList_qList[0] in posAnaloguesScreeningAtomsAllowed:
+                    #         refMolRings = CalcNumRings(refMol)
+                    #         if synthLib[synth]["n_rings"] == refMolRings:
+                    #             analogMol = Chem.MolFromSmiles(synth)
+                    #             analogMol.UpdatePropertyCache()
+                    #             Chem.GetSymmSSSR(analogMol)
+                    #             analogMol.GetRingInfo().AtomRings()
+                    #             if refMol.HasSubstructMatch(analogMol):
+                    #                 self.bbAnalogues[synth] = synthLib[synth]["BBs"]
+                    #                 self.bbAnaloguesTc[synth] = curr_Tc
+        # print("bbAnalogues", self.bbAnalogues)
+        # print("bbAnaloguesTC", self.bbAnaloguesTc)
+        globBbAnalogues = self.bbAnalogues
+        print("global bbAnalogues", globBbAnalogues)
 
     def printSynthonInfo(self):
         print("\n__________________________________________________________")
@@ -194,55 +219,99 @@ class syntheticPathway:
     def getSynthonsForAnaloguesGeneration(self, SynthLib, simTh, strictAvailabilityMode = True):
         synthonsDict = {}
         SynthonsForAnaloguesSynthesis = set()
+        # this dict is for storage of IDs
+        analoguesDict = {}
         if not strictAvailabilityMode:
+            # print("participatingSynthon", self.participatingSynthon)
             for ind, synth in enumerate(self.participatingSynthon):
+                # print("================synth", synth.__dict__)
 
                 if "Reagent_" + str(ind + 1) not in synthonsDict:
                     synthonsDict["Reagent_" + str(ind + 1)] = { "synthons": [], "bivalentN": synth.bivalentN }
                 synthonsDict["Reagent_" + str(ind + 1)]["synthons"].append(synth.smiles)
+                analoguesDict["Reagent_" + str(ind + 1)] = []
+                analoguesDict["Reagent_" + str(ind + 1)].append(synth.correspondingBB)
                 if not synth.correspondingBB:
                     SynthonsForAnaloguesSynthesis.add(synth.smiles + " missingBB originalBB\n")
+                    print(SynthonsForAnaloguesSynthesis)
                 else:
                     SynthonsForAnaloguesSynthesis.add(synth.smiles + " " + synth.correspondingBB + " originalBB\n")
                 if not synth.bbAnalogues and synth.correspondingBB:
                     synth.searchForSynthonAnalogues(SynthLib, simTh)
+                    # print("========================synth.bbAnalogues", synth.bbAnalogues)
                 if synth.bbAnalogues:
                     for analog in synth.bbAnalogues:
-                        SynthonsForAnaloguesSynthesis.add(analog + " " + synth.bbAnalogues[analog] + " " + synth.smiles + " analog\n")
+                        SynthonsForAnaloguesSynthesis.add(analog + " " + synth.bbAnalogues[analog] + " " + synth.smiles + " analog, Tc=" + str(round(synth.bbAnaloguesTc[analog],2)) + "\n")
                         synthonsDict["Reagent_" + str(ind + 1)]["synthons"].append(analog)
-            return synthonsDict, SynthonsForAnaloguesSynthesis
+                        analoguesDict["Reagent_" + str(ind + 1)].append(synth.bbAnalogues[analog])
+            print("==========================analoguesDict", analoguesDict)
+            return synthonsDict, SynthonsForAnaloguesSynthesis, analoguesDict
         else:
             for ind, synth in enumerate(self.participatingSynthon):
                 if "Reagent_" + str(ind + 1) not in synthonsDict:
                     synthonsDict["Reagent_" + str(ind + 1)] = { "synthons": [], "bivalentN": synth.bivalentN }
+                    analoguesDict["Reagent_" + str(ind + 1)] = []
+                    analoguesDict["Reagent_" + str(ind + 1)].append(synth.correspondingBB)
                 if not synth.bbAnalogues and synth.correspondingBB:
                     synth.searchForSynthonAnalogues(SynthLib, simTh)
                 if synth.correspondingBB:
                     SynthonsForAnaloguesSynthesis.add(synth.smiles + " " + synth.correspondingBB + " originalBB\n")
                     synthonsDict["Reagent_" + str(ind + 1)]["synthons"].append(synth.smiles)
+                    analoguesDict["Reagent_" + str(ind + 1)].append(synth.correspondingBB)
                 if synth.bbAnalogues:
                     for analog in synth.bbAnalogues:
-                        SynthonsForAnaloguesSynthesis.add(analog + " " + synth.bbAnalogues[analog] + " " + synth.smiles + " analog\n")
+                        SynthonsForAnaloguesSynthesis.add(analog + " " + synth.bbAnalogues[analog] + " " + synth.smiles + " analog, Tc=" + str(round(synth.bbAnaloguesTc[analog],2)) + "\n")
                         synthonsDict["Reagent_" + str(ind + 1)]["synthons"].append(analog)
+                        analoguesDict["Reagent_" + str(ind + 1)].append(synth.bbAnalogues[analog])
                 if len(synthonsDict["Reagent_" + str(ind + 1)]["synthons"]) == 0:
-                    return None, None
-            return synthonsDict, SynthonsForAnaloguesSynthesis
+                    return None, None, None
+            # bbAnalogues = synth.bbAnalogues
+            # print("========================synth.bbAnalogues", bbAnalogues)
+            print("==========================analoguesDict", analoguesDict)
+            return synthonsDict, SynthonsForAnaloguesSynthesis, analoguesDict
 
 class enumeration:
-    def __init__(self, outDir, Synthons = None, reactionSMARTS = None, maxNumberOfReactedSynthons=6, MWupperTh=None, MWlowerTh=None,
-                  desiredNumberOfNewMols = 1000, nCores=1, analoguesEnumeration=False):
+    def __init__(self, outDir, Synthons = None, Synthons2 = None, reactionSMARTS = None, bbAnalogues = None, maxNumberOfReactedSynthons=6, MWupperTh=None, MWlowerTh=None,
+                  desiredNumberOfNewMols = 1000, nCores=1, analoguesEnumeration=False, reactionIds = None):
+        #print(type(Synthons))
+        if not os.path.isdir(outDir):
+            os.mkdir(outDir)
+        else:
+            for filename in os.listdir(outDir):
+                if filename[0] != '.': 
+                    os.remove(os.path.join(outDir,filename))
         if analoguesEnumeration and Synthons!=None:
+            # {Reagent_1:[rdkit,rdkit...]}
             self.__Synthons = None
+            # {Reagent_1:[ID,ID...]}
+            self.__SynthonDictID = {}
+            self.__reactionIds = reactionIds
+            self.__bbAnalogues = bbAnalogues
             self.__monoFuncBB = None
             self.__poliFuncBB = None
             self.__biFuncBB = None
             self.__maxNumberOfReactedSynthons = len(Synthons)
+            self.__reactions = []
+            self.__prepSynthonsAndReactionsAnalogues(Synthons, reactionSMARTS, analoguesEnumeration)
         else:
-            self.__Synthons = []
-            self.__monoFuncBB = []
-            self.__poliFuncBB = []
-            self.__biFuncBB = []
+            # self.__Synthons = []
+            self.__SynthonDict = Synthons
+            self.__Synthons = list(self.__SynthonDict.keys())
+            self.__SynthonDict2 = Synthons2
+            self.__Synthons2 = list(self.__SynthonDict2.keys())
+            self.__reactionIds = reactionIds
+            # self.__SynthonDictMol = {}
+            self.__monoFuncBB = {}
+            self.__poliFuncBB = {}
+            self.__biFuncBB = {}
+            self.__monoFuncBB2 = {}
+            self.__poliFuncBB2 = {}
+            self.__biFuncBB2 = {}
             self.__maxNumberOfReactedSynthons = maxNumberOfReactedSynthons
+            self.__reactions = []
+            self.__prepSynthonsAndReactions2(Synthons2, reactionSMARTS, analoguesEnumeration)
+            self.__prepSynthonsAndReactions(Synthons, reactionSMARTS, analoguesEnumeration)
+
         self.__MWfiltration=False
         if MWupperTh:
             self.__MWupperTh = MWupperTh
@@ -250,13 +319,14 @@ class enumeration:
         if  MWlowerTh:
             self.__MWlowerTh = MWlowerTh
             self.__MWfiltration = True
-        self.__reactions = []
-        self.__perpSynthonsAndReactions(Synthons, reactionSMARTS, analoguesEnumeration)
+        
+        
+        
         self.__desiredNumberOfNewMols = desiredNumberOfNewMols
         self.__nCores = nCores
         self.__outDir = outDir
         self.__genNonUniqMols = 0
-        self.results = set()
+        self.results = {} #set()
         self.allReconstructedMols = []
         self.__marksCombinations = {'C:10': ['N:20', 'O:20', 'C:20', 'c:20', 'n:20', 'S:20'],
                                     'c:10': ['N:20', 'O:20', 'C:20', 'c:20', 'n:20', 'S:20'],
@@ -270,42 +340,45 @@ class enumeration:
 
 
     def getReconstructedMols(self, allowedToRunSubprocesses=False, randomSeed=None, seed = (0,0), mainRun = True):
+       
         pat = re.compile("\[\w*:\w*\]")
         if randomSeed==None:
             seed, randomSeed = self.__getRandomSeed(seed)
         if randomSeed:
             allowedMarks = []
-            for key in [Chem.MolToSmiles(randomSeed, canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(randomSeed, canonical=True)[m.end() - 3:m.end() - 1]
-                        for m in re.finditer(pat, Chem.MolToSmiles(randomSeed, canonical=True))]:
-                allowedMarks.extend(self.__marksCombinations[key])
+            for key in [Chem.MolToSmiles(self.__SynthonDictMol[randomSeed], canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(self.__SynthonDictMol[randomSeed], canonical=True)[m.end() - 3:m.end() - 1]
+                        for m in re.finditer(pat, Chem.MolToSmiles(self.__SynthonDictMol[randomSeed], canonical=True))]:
+                if key in self.__marksCombinations:
+                    allowedMarks.extend(self.__marksCombinations[key])
             allowedMarks = set(allowedMarks)
+           
+            #print(allowedMarks)
             Pool = []
-            for partner in self.__poliFuncBB + self.__biFuncBB + self.__monoFuncBB:
-                partnerMarks = set([Chem.MolToSmiles(partner, canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(partner, canonical=True)[m.end() - 3:m.end() - 1]
-                        for m in re.finditer(pat, Chem.MolToSmiles(partner, canonical=True))])
+            # WARNING iterating through dictionary instead of the list!
+            for partner in self.__SynthonDictMol2.keys(): #self.__poliFuncBB + self.__biFuncBB + self.__monoFuncBB:
+                # smiles -- mol -- and then smiles again?
+                partnerMarks = set([Chem.MolToSmiles(self.__SynthonDictMol2[partner], canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(self.__SynthonDictMol2[partner], canonical=True)[m.end() - 3:m.end() - 1]
+                        for m in re.finditer(pat, Chem.MolToSmiles(self.__SynthonDictMol2[partner], canonical=True))])
+               
                 if allowedMarks.intersection(partnerMarks):
                     if allowedToRunSubprocesses:
                         Pool, nAlive = self.__countAndMergeActiveThreads(Pool)
                         while nAlive >= self.__nCores:
-                            time.sleep(30)
                             Pool, nAlive = self.__countAndMergeActiveThreads(Pool)
                         queue = Queue()
-                        process = Process(target=self.__molReconsrtuction, args=(randomSeed, partner, 1, None, queue,))
+                        process = Process(target=self.__molReconsrtuction, args=(self.__SynthonDictMol[randomSeed], randomSeed, self.__SynthonDictMol2[partner], partner, 1, None, queue,))
                         process.start()
                         Pool.append([process, queue, False]) # [the process, queue, was it already joined]
                         if self.__genNonUniqMols >= self.__desiredNumberOfNewMols:
                             break
                     else:
-                        self.results.update(self.__molReconsrtuction(randomSeed, partner, 1, queue=None))
+                        self.results.update(self.__molReconsrtuction(self.__SynthonDictMol[randomSeed], randomSeed, self.__SynthonDictMol2[partner], partner, 1, queue=None))
                         print("Number of so far reconstructed unique molecules = " + str(len(self.results)))
                         if len(self.results) >= self.__desiredNumberOfNewMols:
                             break
             if allowedToRunSubprocesses:
                 Pool, nAlive = self.__countAndMergeActiveThreads(Pool)
-                while nAlive > 0:
-                    time.sleep(5)
-                    Pool, nAlive = self.__countAndMergeActiveThreads(Pool)
-
+                whilresults
         whileCount = 0
         while mainRun:
             if not allowedToRunSubprocesses and len(self.results) >= self.__desiredNumberOfNewMols :
@@ -320,17 +393,41 @@ class enumeration:
             if randomSeed is None:
                 break
             self.results.update(self.getReconstructedMols(allowedToRunSubprocesses, randomSeed, seed, mainRun = False))
+                     
         d_names, f_names, main_dir = listDir(self.__outDir)
-        with open(os.path.join(self.__outDir, "FinalOut_allEnumeratedCompounds_DuplicatesCanBePresent.smi"), "ab") as out:
+        with open(os.path.join(self.__outDir, "FinalOut_allEnumeratedCompounds_DuplicatesCanBePresent.smi"), "a") as out:
+            # deleted binary mode opening, switched to text mode
             for file in f_names:
-                if "temp_" in file:
-                    with open(os.path.join(self.__outDir, file), "rb") as f:
-                        out.write(f.read())
+                if "tmp" in file:
+                  
+                    with open(os.path.join(self.__outDir, file), "r") as f:
+                        data = f.read()
+                        print("===============read temp_", data)
+                        if(data != ""):
+                            out.write(data)                    
+                            out.write('\n')
                         out.flush()
-                    os.remove(os.path.join(self.__outDir, file))
+                        f.close()
+                        try:
+                            os.remove(f.name)
+                        except OSError:
+                            pass
+            
+            for mols in self.results:
+                mol_id = ""
+                for x in mols:
+                    mol_id = mol_id + str(x) + "_"
+                
+                line = mols + " " + mol_id
+                out.write(line)
+                out.write("\n")
+                out.flush()
+            out.close()
+            
         return self.results
 
     def AnaloguesGeneration(self):
+        # numbers in the __Synthons list to reference IDs in the 
         if type(self.__Synthons) == dict:
             for rid in range(len(self.__reactions)):
                 reaction = self.__reactions[rid]
@@ -339,15 +436,22 @@ class enumeration:
                         SynthonsetPartner = 'Reagent_' + str(ind2)
                         Synthonset = 'Reagent_' + str(ind1)
                         if self.__checkBB_reactionCombination(self.__Synthons[Synthonset][0], self.__Synthons[SynthonsetPartner][0], reaction):
+                            firstBbNumb = secondBbNumb = 0
                             for firstBB in self.__Synthons[Synthonset]:
+                                secondBbNumb = 0
                                 for secondBB in self.__Synthons[SynthonsetPartner]:
                                     SynthonsetsUsed = set()
                                     SynthonsetsUsed.add(Synthonset)
                                     SynthonsetsUsed.add(SynthonsetPartner)
-                                    self.results.update(self.__molAnaloguesLibEnumeration(reagent=firstBB, partner=secondBB,
+                                    print("synth numbers", Synthonset, SynthonsetPartner, firstBbNumb, secondBbNumb)
+                                    self.results.update(self.__molAnaloguesLibEnumeration(reagent=firstBB, partner=secondBB, 
+                                      reagNumb=firstBbNumb, partnNumb=secondBbNumb, Synthonset=Synthonset, SynthonsetPartner=SynthonsetPartner,
                                       numberOfBBalreadyReacted=1, SynthonsetsUsed=SynthonsetsUsed, reactionToUse = rid))
+                                    secondBbNumb += 1
                                     if len(self.results) >= self.__desiredNumberOfNewMols:
                                         return self.results
+                                firstBbNumb += 1
+            print(self.results)
             return self.results
         else:
             print("Separate reconstructur should be evocken for Molecule analogues generation "
@@ -355,11 +459,14 @@ class enumeration:
                   "simple molecules enumeration from the list of BBs (set analoguesEnumeration=False).")
             exit()
 
-    def __molAnaloguesLibEnumeration(self, reagent, partner, numberOfBBalreadyReacted,
+    def __molAnaloguesLibEnumeration(self, reagent, partner, reagNumb, partnNumb, Synthonset, SynthonsetPartner, numberOfBBalreadyReacted,
                                                     SynthonsetsUsed, reactionToUse, usedReactions = None, firstLaunch=True):
+        # print("REAGENTS", reagent, partner)
+        print("first launch?", firstLaunch)
+        # print("===objects", reagent, partner, reagNumb, partnNumb, Synthonset, SynthonsetPartner, numberOfBBalreadyReacted, SynthonsetsUsed, reactionToUse, self.__bbAnalogues)
         if not usedReactions:
             usedReactions = []
-        allProducts = set()
+        allProducts = {} #set()
         products = self.__reactions[reactionToUse].RunReactants((reagent, partner))
         if not products:
             products = self.__reactions[reactionToUse].RunReactants((partner, reagent))
@@ -373,6 +480,20 @@ class enumeration:
                     prod.GetRingInfo().NumRings()
                     newUsedReactions = usedReactions.copy()
                     newUsedReactions.append(reactionToUse)
+                    # Fixing reagent numbers in case of a) BB not available or b) Nth stage reaction
+                    if firstLaunch == False:
+                        reagIdPrint = reagNumb # will be prod_id if this is the Nth stage
+                    else:
+                        if self.__bbAnalogues[Synthonset][reagNumb] == None:
+                            reagIdPrint = "None"
+                        else:
+                            reagIdPrint = self.__bbAnalogues[Synthonset][reagNumb]
+                    if self.__bbAnalogues[SynthonsetPartner][partnNumb] == None:
+                        partIdPrint = "None"
+                    else:
+                        partIdPrint = self.__bbAnalogues[SynthonsetPartner][partnNumb]
+                    prod_id = str(self.__reactionIds[reactionToUse]) + "_" +  reagIdPrint + "_" + partIdPrint
+                    print(prod_id)
                     if functionality:
                         for rid in range(len(self.__reactions)):
                             if rid not in newUsedReactions:
@@ -380,24 +501,29 @@ class enumeration:
                                 for SynthonsetPartner in self.__Synthons:
                                     if SynthonsetPartner not in SynthonsetsUsed and self.__checkBB_reactionCombination(prod,
                                                                               self.__Synthons[SynthonsetPartner][0], reaction):
+                                        partnNumbLocal = 0
                                         for secondBB in self.__Synthons[SynthonsetPartner]:
                                             newSynthonsetsUsed = set()
                                             for i in SynthonsetsUsed:
                                                 newSynthonsetsUsed.add(i)
                                             newSynthonsetsUsed.add(SynthonsetPartner)
+                                            # WARNING
                                             subResults = self.__molAnaloguesLibEnumeration(reagent=prod,
-                                                  partner=secondBB, numberOfBBalreadyReacted=numberOfBBalreadyReacted +1,
+                                                  partner=secondBB, reagNumb=prod_id, partnNumb=partnNumbLocal, Synthonset=Synthonset, SynthonsetPartner=SynthonsetPartner,
+                                                  numberOfBBalreadyReacted=numberOfBBalreadyReacted +1,
                                                   SynthonsetsUsed=newSynthonsetsUsed, reactionToUse=rid, usedReactions = newUsedReactions,
                                                                                            firstLaunch=False)
                                             if subResults:
                                                 allProducts.update(subResults)
                                             if len(allProducts)>=self.__desiredNumberOfNewMols and firstLaunch:
                                                 return list(allProducts)
+                                            partnNumbLocal += 1
                     elif not functionality and numberOfBBalreadyReacted + 1 >= len(self.__Synthons):
-                        allProducts.add(prodSMILES)
+                        allProducts[prodSMILES] = prod_id
+                        # allProducts.add(prodSMILES)
                         if len(allProducts) >= self.__desiredNumberOfNewMols and firstLaunch:
-                            return list(allProducts)
-        return list(allProducts)
+                            return allProducts
+        return allProducts
 
     def __checkBB_reactionCombination(self, reagent, partner, reaction):
         products = reaction.RunReactants((reagent, partner))
@@ -410,92 +536,160 @@ class enumeration:
             else:
                 return False
 
-    def __molReconsrtuction(self, reagent, partner, numberOfBBalreadyReacted,  alreadyUsedReactionsInds=None, queue=None):
+    def __molReconsrtuction(self, reagent, reag_id, partner, partner_id, numberOfBBalreadyReacted,  alreadyUsedReactionsInds=None, queue=None):
         if not alreadyUsedReactionsInds:
             alreadyUsedReactionsInds = set()
         pat = re.compile("\[\w*:\w*\]")
-        allProducts = []
+        allProducts = {}
+        # print(self.__reactions)
         for id,reaction in enumerate(self.__reactions):
+            #print(self.__reactionIds[id])
+            #print(self.__tags[id])
             if id in alreadyUsedReactionsInds:
                 continue
             products = reaction.RunReactants((reagent, partner))
             if not products:
                 products = reaction.RunReactants((partner, reagent))
+            # print(products)
             if products:
                 for prodSet in products:
                     for prod in prodSet:
                         prodSMILES = Chem.MolToSmiles(prod, canonical=True)
+                        #print(prodSMILES)
                         functionality = prodSMILES.count(":")
                         prod.UpdatePropertyCache()
                         Chem.GetSymmSSSR(prod)
                         prod.GetRingInfo().NumRings()
+                        prod_id = str(self.__reactionIds[id]) + "_" + reag_id + "_" + partner_id
+                        #print(prod_id)
                         if functionality:
                             allowedMarks = []
                             for key in [prodSMILES[m.start() + 1] + ":" + prodSMILES[m.end() - 3:m.end() - 1] for m in
                                         re.finditer(pat, prodSMILES)]:
-                                allowedMarks.extend(self.__marksCombinations[key])
+                                if key in self.__marksCombinations:
+                                    allowedMarks.extend(self.__marksCombinations[key])
                             allowedMarks = set(allowedMarks)
                             if numberOfBBalreadyReacted + 1 <= self.__maxNumberOfReactedSynthons - functionality:
                                 if numberOfBBalreadyReacted + 1 == self.__maxNumberOfReactedSynthons - functionality:
                                     for newPartner in self.__monoFuncBB:
                                         partnerMarks = set([
-                                            Chem.MolToSmiles(newPartner, canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(newPartner, canonical=True)[
-                                            m.end() - 3:m.end() - 1] for m in re.finditer(pat, Chem.MolToSmiles(newPartner, canonical=True))])
+                                            Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True)[
+                                            m.end() - 3:m.end() - 1] for m in re.finditer(pat, Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True))])
                                         if allowedMarks.intersection(partnerMarks):
                                             alreadyUsedReactionsInds.add(id)
-                                            subResults = self.__molReconsrtuction(prod, newPartner, numberOfBBalreadyReacted+1,
+                                            subResults = self.__molReconsrtuction(prod, prod_id, self.__SynthonDictMol[newPartner], newPartner, numberOfBBalreadyReacted+1,
                                                                                   alreadyUsedReactionsInds=alreadyUsedReactionsInds)
                                             if subResults:
-                                                allProducts.extend(subResults)
+                                                print("+++++subResults", subResults)
+                                                allProducts.update(subResults)
                                 elif functionality>3:
                                     for newPartner in self.__monoFuncBB + self.__biFuncBB:
                                         partnerMarks = set([
-                                            Chem.MolToSmiles(newPartner, canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(
-                                                newPartner, canonical=True)[m.end() - 3:m.end() - 1]
-                                            for m in re.finditer(pat, Chem.MolToSmiles(newPartner, canonical=True))])
+                                            Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(
+                                                self.__SynthonDictMol[newPartner], canonical=True)[m.end() - 3:m.end() - 1]
+                                            for m in re.finditer(pat, Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True))])
                                         if allowedMarks.intersection(partnerMarks):
                                             alreadyUsedReactionsInds.add(id)
-                                            subResults = self.__molReconsrtuction(prod, newPartner, numberOfBBalreadyReacted+1,
+                                            subResults = self.__molReconsrtuction(prod, prod_id, self.__SynthonDictMol[newPartner], newPartner, numberOfBBalreadyReacted+1,
                                                                                   alreadyUsedReactionsInds=alreadyUsedReactionsInds)
                                             if subResults:
-                                                allProducts.extend(subResults)
-                                                allProducts = list(set(allProducts))
-                                else:
-                                    for newPartner in self.__monoFuncBB + self.__biFuncBB + self.__poliFuncBB:
-                                        partnerMarks = set([
-                                            Chem.MolToSmiles(newPartner, canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(
-                                                newPartner, canonical=True)[
-                                                                                                m.end() - 3:m.end() - 1]
-                                            for m in re.finditer(pat, Chem.MolToSmiles(newPartner, canonical=True))])
-                                        if allowedMarks.intersection(partnerMarks):
-                                            alreadyUsedReactionsInds.add(id)
-                                            subResults = self.__molReconsrtuction(prod, newPartner, numberOfBBalreadyReacted+1,
-                                                                                  alreadyUsedReactionsInds=alreadyUsedReactionsInds)
-                                            if subResults:
-                                                allProducts.extend(subResults)
-                                                allProducts = list(set(allProducts))
+                                                print("+++++subResults", subResults)
+                                                allProducts.update(subResults)
+                                                # allProducts = list(set(allProducts))
+                                else:       
+                                    for bblist in self.__Synthons:
+                                        for newPartner in bblist:
+                                            # print(re.finditer(Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True)))
+                                            partnerMarks = set([
+                                                Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True)[m.start() + 1] + ":" + Chem.MolToSmiles(
+                                                    self.__SynthonDictMol[newPartner], canonical=True)[
+                                                                                                    m.end() - 3:m.end() - 1]
+                                                for m in re.finditer(pat, Chem.MolToSmiles(self.__SynthonDictMol[newPartner], canonical=True))])
+                                            if allowedMarks.intersection(partnerMarks):
+                                                alreadyUsedReactionsInds.add(id)
+                                                subResults = self.__molReconsrtuction(prod, prod_id, self.__SynthonDictMol[newPartner], newPartner, numberOfBBalreadyReacted+1,
+                                                                                    alreadyUsedReactionsInds=alreadyUsedReactionsInds)
+                                                if subResults:
+                                                    print("+++++subResults", subResults)
+                                                    allProducts.update(subResults)
+                                                    # allProducts = list(set(allProducts))
                         else:
                             if prodSMILES not in allProducts:
                                 if self.__MWfiltration:
                                     molW = ExactMolWt(prod)
                                     if self.__MWlowerTh and self.__MWupperTh:
                                         if molW <= self.__MWupperTh and molW >= self.__MWlowerTh:
-                                            allProducts.append(prodSMILES)
+                                            allProducts[prodSMILES] = (self.__reactionIds[id], reag_id, partner_id)
                                     elif self.__MWlowerTh:
                                         if molW >= self.__MWlowerTh:
-                                            allProducts.append(prodSMILES)
+                                            allProducts[prodSMILES] = (self.__reactionIds[id], reag_id, partner_id)
                                     elif self.__MWupperTh:
                                         if molW <= self.__MWupperTh:
-                                            allProducts.append(prodSMILES)
+                                            allProducts[prodSMILES] = (self.__reactionIds[id], reag_id, partner_id)
                                 else:
-                                    allProducts.append(prodSMILES)
-
+                                    allProducts[prodSMILES] = (self.__reactionIds[id], reag_id, partner_id)
         if queue is None:
-            return list(set(allProducts))
+            return allProducts
         else:
-            queue.put(list(set(allProducts)))
+            queue.put(allProducts)
 
-    def __perpSynthonsAndReactions(self, Synthons, reactionSMARTS, analoguesEnumeration):
+    # this function is not pure!
+    def __prepSynthonsAndReactions(self, Synthons, reactionSMARTS, analoguesEnumeration):
+        if Synthons == None:
+            raise ValueError("No building blocks are provided for enumeration")
+        else:
+            monoFuncBB = []
+            biFuncBB = []
+            poliFuncBB = []
+            for bb in Synthons:
+                if bb.count(":") == 1:
+                    monoFuncBB.append(bb)
+                elif bb.count(":") == 2:
+                    biFuncBB.append(bb)
+                else:
+                    poliFuncBB.append(bb)
+            
+            if monoFuncBB == None:
+                raise ValueError("No monofunctional building blocks are provided for enumeration")
+            else:
+                moldict = {}
+                for x in monoFuncBB:
+                    moldict[self.__SynthonDict[x]] = Chem.MolFromSmiles(x) 
+                self.__monoFuncBB = self.__PrepMolForReconstruction(moldict)   
+                # random.shuffle(self.__monoFuncBB)
+                # WARNING random shuffle might be needed!
+            if biFuncBB:
+                moldict = {}
+                for x in biFuncBB:
+                    moldict[self.__SynthonDict[x]] = Chem.MolFromSmiles(x) 
+                self.__biFuncBB = self.__PrepMolForReconstruction(moldict)
+                # random.shuffle(self.__biFuncBB)
+            if poliFuncBB:
+                moldict = {}
+                for x in poliFuncBB:
+                    moldict[self.__SynthonDict[x]] = Chem.MolFromSmiles(x) 
+                self.__poliFuncBB = self.__PrepMolForReconstruction(moldict)
+                # random.shuffle(self.__poliFuncBB)
+            self.__Synthons = (self.__poliFuncBB, self.__biFuncBB, self.__monoFuncBB)
+            
+            
+            # we must have a full synthon dictionary with mol objects
+            self.__SynthonDictMol = self.__poliFuncBB
+            self.__SynthonDictMol.update(self.__biFuncBB)
+            self.__SynthonDictMol.update(self.__monoFuncBB)
+            # print("Synthons:", self.__Synthons)
+            # print("SynthonDictMol", self.__SynthonDictMol)
+            
+        if reactionSMARTS == None:
+            raise ValueError("No reactions are provided for enumeration")
+        else:
+            for react in reactionSMARTS:
+                if react:
+                    reaction = Reactions.ReactionFromSmarts(react)
+                    self.__reactions.append(reaction)
+                        
+    def __prepSynthonsAndReactionsAnalogues(self, Synthons, reactionSMARTS, analoguesEnumeration):
+        # print("====================bbAnalogues in __prepSynthonsAndReactionsAnalogues", bbAnalogues)
         if Synthons == None:
             raise ValueError("No building blocks are provided for enumeration")
         else:
@@ -503,39 +697,81 @@ class enumeration:
                 self.__Synthons = dict()
                 for subset in Synthons:
                     bbsList = [Chem.MolFromSmiles(x) for x in Synthons[subset]["synthons"]]
-                    self.__Synthons[subset] = self.__PrepMolForReconstruction(bbsList, Synthons[subset]["bivalentN"])
-            else:
-                monoFuncBB = []
-                biFuncBB = []
-                poliFuncBB = []
-                for bb in Synthons:
-                    if bb.count(":") == 1:
-                        monoFuncBB.append(bb)
-                    elif bb.count(":") == 2:
-                        biFuncBB.append(bb)
-                    else:
-                        poliFuncBB.append(bb)
-                if monoFuncBB == None:
-                    raise ValueError("No monofunctional building blocks are provided for enumeration")
-                else:
-                    self.__monoFuncBB = self.__PrepMolForReconstruction([Chem.MolFromSmiles(x) for x in monoFuncBB])
-                    random.shuffle(self.__monoFuncBB)
-                if biFuncBB:
-                    self.__biFuncBB = self.__PrepMolForReconstruction([Chem.MolFromSmiles(x) for x in biFuncBB])
-                    random.shuffle(self.__biFuncBB)
-                if poliFuncBB:
-                    self.__poliFuncBB = self.__PrepMolForReconstruction([Chem.MolFromSmiles(x) for x in poliFuncBB])
-                    random.shuffle(self.__poliFuncBB)
-                self.__Synthons = (self.__poliFuncBB, self.__biFuncBB, self.__monoFuncBB)
+                    self.__Synthons[subset] = self.__PrepMolForReconstructionAnalogues(bbsList, Synthons[subset]["bivalentN"])
+                    # print("+++++++++++++++++++__Synthons", self.__Synthons)
+                    # self.__SynthonDictID[subset] = [bbAnalogues[x] for x in Synthons[subset]["synthons"]]
+                    # print("+++++++++++++++++++__SynthonDictID", self.__SynthonDictID)
+            # print("reactionSMARTS", reactionSMARTS)
             if reactionSMARTS == None:
                 raise ValueError("No reactions are provided for enumeration")
             else:
+                # For some reason the following line was "for react in reactionSMARTS[0]:"
                 for react in reactionSMARTS:
+                    print("reaction", react)
                     if react:
                         reaction = Reactions.ReactionFromSmarts(react)
                         self.__reactions.append(reaction)
 
-    def __PrepMolForReconstruction(sefl, molList, bivalentN=False): # list of Mol objects
+    def __prepSynthonsAndReactions2(self, Synthons2, reactionSMARTS, analoguesEnumeration):
+        if Synthons2 == None:
+            raise ValueError("No building blocks are provided for enumeration")
+        else:
+            if analoguesEnumeration:
+                self.__Synthons2 = dict()
+                for subset in Synthons2:
+                    bbsList = [Chem.MolFromSmiles(x) for x in Synthons2[subset]["synthons"]]
+                    self.__Synthons2[subset] = self.__PrepMolForReconstructionAnalogues(bbsList, Synthons2[subset]["bivalentN"])
+            else:
+                monoFuncBB2 = []
+                biFuncBB2 = []
+                poliFuncBB2 = []
+                for bb in Synthons2:
+                    if bb.count(":") == 1:
+                        monoFuncBB2.append(bb)
+                    elif bb.count(":") == 2:
+                        biFuncBB2.append(bb)
+                    else:
+                        poliFuncBB2.append(bb)
+                
+                if monoFuncBB2 == None:
+                    raise ValueError("No monofunctional building blocks are provided for enumeration")
+                else:
+                    moldict = {}
+                    for x in monoFuncBB2:
+                        moldict[self.__SynthonDict2[x]] = Chem.MolFromSmiles(x) 
+                    self.__monoFuncBB2 = self.__PrepMolForReconstruction(moldict)
+                    # random.shuffle(self.__monoFuncBB)
+                    # WARNING random shuffle might be needed!
+                if biFuncBB2:
+                    moldict = {}
+                    for x in biFuncBB2:
+                        moldict[self.__SynthonDict2[x]] = Chem.MolFromSmiles(x) 
+                    self.__biFuncBB2 = self.__PrepMolForReconstruction(moldict)
+                    # random.shuffle(self.__biFuncBB)
+                if poliFuncBB2:
+                    moldict = {}
+                    for x in poliFuncBB2:
+                        moldict[self.__SynthonDict2[x]] = Chem.MolFromSmiles(x) 
+                    self.__poliFuncBB2 = self.__PrepMolForReconstruction(moldict)
+                    #print("===poliFuncBB2", self.__poliFuncBB2)
+                    # random.shuffle(self.__poliFuncBB)
+                self.__Synthons2 = (self.__poliFuncBB2, self.__biFuncBB2, self.__monoFuncBB2)
+                # we must have a full synthon dictionary with mol objects
+                self.__SynthonDictMol2 = self.__poliFuncBB2
+                self.__SynthonDictMol2.update(self.__biFuncBB2)
+                self.__SynthonDictMol2.update(self.__monoFuncBB2)
+                #print("Synthons:", self.__Synthons2)
+                #print("SynthonDictMol", self.__SynthonDictMol2)
+            # if reactionSMARTS == None:
+            #     raise ValueError("No reactions are provided for enumeration")
+            # else:
+            #     for react in reactionSMARTS:
+            #         if react:
+            #             reaction = Reactions.ReactionFromSmarts(react)
+            #             self.__reactions.append(reaction)
+            
+            
+    def __PrepMolForReconstructionAnalogues(sefl, molList, bivalentN=False): # list of Mol objects
         newList = []
         labels = [10, 20, 30, 40, 50, 60, 70, 21, 11]
         atomsForMarking = [23, 74, 72, 104, 105, 106, 107, 108, 109]
@@ -583,40 +819,109 @@ class enumeration:
                 newList.append(mol)
         return newList # list of Mol objects
 
+    def __PrepMolForReconstruction(sefl, molDict, bivalentN=False): # list of Mol objects
+        newDict = {}
+        labels = [10, 20, 30, 40, 50, 60, 70, 21, 11]
+        atomsForMarking = [23, 74, 72, 104, 105, 106, 107, 108, 109]
+        atomsForMarkingForDoubleBonds = [72, 104, 105]
+        for synt in molDict.keys():
+            mol = AddHs(molDict[synt])
+            for atom in mol.GetAtoms():
+                if atom.GetAtomMapNum() != 0:
+                    repl = atomsForMarking[labels.index(atom.GetAtomMapNum())]
+                    replCount = 0
+                    for neighbor in atom.GetNeighbors():
+                        if neighbor.GetAtomicNum() == 1:
+                            mol.GetAtomWithIdx(neighbor.GetIdx()).SetAtomicNum(repl)
+                            replCount += 1
+                            if repl not in atomsForMarkingForDoubleBonds and replCount == 1:
+                                break
+                            elif replCount == 2:
+                                break
+            mol = RemoveHs(mol)
+            newDict[synt] = mol
+        if bivalentN:
+            for synt in molDict.keys():
+                mol = AddHs(molDict[synt])
+                for atom in mol.GetAtoms():
+                    if atom.GetAtomMapNum() != 0:
+                        repl = atomsForMarking[labels.index(atom.GetAtomMapNum())]
+                        replCount = 0
+                        if atom.GetSymbol() == "N" and atom.GetAtomMapNum() == 20:
+                            for neighbor in atom.GetNeighbors():
+                                if neighbor.GetAtomicNum() == 1:
+                                    mol.GetAtomWithIdx(neighbor.GetIdx()).SetAtomicNum(repl)
+                                    replCount += 1
+                                    if replCount == 2:
+                                        break
+                        else:
+                            for neighbor in atom.GetNeighbors():
+                                if neighbor.GetAtomicNum() == 1:
+                                    mol.GetAtomWithIdx(neighbor.GetIdx()).SetAtomicNum(repl)
+                                    replCount += 1
+                                    if repl not in atomsForMarkingForDoubleBonds and replCount == 1:
+                                        break
+                                    elif replCount == 2:
+                                        break
+                mol = RemoveHs(mol)
+                newDict[synt] = mol
+        return newDict # dict of Mol objects
+
     def __getRandomSeed(self, seed):
         randomSeed = None
+        # for i in range(len(self.__Synthons)):
+            # for ii in range(len(self.__Synthons[i])):
+
+        self.__SynthList = list((list(x.keys()) for x in self.__Synthons))
+        
         while not randomSeed:
             if seed[1] > 2:
                 break
-            if seed[0] < len(self.__Synthons[seed[1]]):
-                randomSeed = self.__Synthons[seed[1]][seed[0]]
+            if seed[0] < len(self.__SynthList[seed[1]]):
+                randomSeed = self.__SynthList[seed[1]][seed[0]] # Synthon ID
             else:
                 seed = list(seed)
                 seed[1] += 1
                 seed[0] = 0
                 seed = tuple(seed)
                 continue
+        #print("seeds", seed, randomSeed)
         return seed, randomSeed
 
     def __countAndMergeActiveThreads(self, Pool):
         nAlive = 0
         for p in Pool:
-            if p[1].empty():
+            #p[1].empty() hanging for some reason?
+            if p[1].qsize() <= 0:
+                #all processes in queue have finished, thread is now free for more work
                 nAlive += 1
             else:
                 reconstructedMols = p[1].get()
+                #print("+++++++type of reconstructedMols ", type(reconstructedMols))
+                
                 # self.results.extend(p[1].get())
                 # self.results = list(set(self.results))
                 self.__genNonUniqMols += len(reconstructedMols)
                 print("Number of so far reconstructed molecules (may contain duplicates) = " + str(self.__genNonUniqMols))
                 d_names, f_names, main_dir = listDir(self.__outDir)
                 n = 0
-                for file in f_names:
-                    if "temp_" in file:
-                        if int(file.split("_")[1]) > n:
-                            n = int(file.split("_")[1])
-                with open(os.path.join(self.__outDir, "temp_" + str(n + 1)), "w") as out:
-                    out.writelines("%s\n" % mols for mols in reconstructedMols)
+                # for file in f_names:
+                #     if "temp_" in file:
+                #         if int(file.split("_")[1]) > n:
+                #             n = int(file.split("_")[1])
+                with open(os.path.join(self.__outDir, str(int(p[0].name[-1])%self.__nCores)+"tmp"), "a+") as out:
+                    print("++++==+++++++++++++writing output")
+                    for mols in reconstructedMols.keys():
+                        mol_id = ""
+                        for x in reconstructedMols[mols]:
+                            mol_id = mol_id + str(x) + "_"
+                        
+                        line = mols + " " + mol_id
+                        out.write(line)
+                        out.write("\n")
+                        out.flush()
+                   
+                    #out.writelines(("%s %s\n" % mols, str(reconstructedMols[mols]) for mols in reconstructedMols.keys()))
                 p[0].join()
                 p[-1] = True
                 p[1].close()
@@ -662,6 +967,7 @@ class fragmentation:
             else:
                 print("Processing BB library. It may take a few minutes, depending on the library size")
                 self.SynthLib = self.__readSynthLib(SynthLibrary, Ro2SynthonsFiltration)
+                # print(self.SynthLib)
         else:
             self.SynthLib = None
 
@@ -690,15 +996,18 @@ class fragmentation:
 
     def getReactionForReconstruction(self, reactionList=None):
         reactionForReconstruction = []
+        reactionIds = []
         if reactionList:
             for key in reactionList:
                 if "R14" not in key:
                     reactionForReconstruction.append(self.__reactionSetup[key]["ReconstructionSMARTS"])
+                    reactionIds.append(key)
         else:
             for key in self.__reactionSetup:
                 if "R14" not in key:
                     reactionForReconstruction.append(self.__reactionSetup[key]["ReconstructionSMARTS"])
-        return reactionForReconstruction
+                    reactionIds.append(key)
+        return reactionForReconstruction, reactionIds # list(self.__reactionSetup.keys())
 
     def __readSynthLib(self, SynthLib, Ro2Filtration):
         fragBegTime = datetime.datetime.now()
@@ -729,6 +1038,7 @@ class fragmentation:
                             str(atom.GetTotalDegree()) for atom in mol.GetAtoms() if atom.GetAtomMapNum() != 0]))
         print("Lib BB reading time:")
         print(datetime.datetime.now() - fragBegTime)
+        # print(availableSynthons)
         return availableSynthons
 
     def __getSetup(self, reactionsToWorkWith):
@@ -1123,65 +1433,83 @@ def fragmentMolecule(smiles, SyntOnfragmentor, simTh=-1):
         return None,None
 
 def analoguesLibraryGeneration(Smiles_molNameTuple, SyntOnfragmentor, outDir, simTh=-1, strictAvailabilityMode=False, desiredNumberOfNewMols=1000):
-    with open(os.path.join(outDir, "SynthonsForAnalogsGenerationForMol" + str(Smiles_molNameTuple[1]) + ".smi"), "w") as outSynthons:
-        allSyntheticPathways, allSynthons = fragmentMolecule(Smiles_molNameTuple[0], SyntOnfragmentor, simTh=simTh)
-        """fsynthonsAfterOneCut = getShortestSyntheticPathways(allSyntheticPathways)
-        shortestSynthesis = findShortestSynthPathWithAvailableSynthLib(fsynthonsAfterOneCut, showAll=False,
-                                                                    firstLaunch=True)"""
-        if allSyntheticPathways and len(allSyntheticPathways) > 1:
-            CompletePath = False
-            leafsComb = getLongestSyntheticPathways(allSyntheticPathways)
-            reconstructedMols = set()
-            for comb in leafsComb:
+    os.makedirs(outDir, exist_ok=True)
+    # this dict is to access self.bbAnalogues dict outside of synthon class. Seems that this class is not initiated at all.
+    # globBbAnalogues = {}
+    outdict = {}
+    
+        
+    allSyntheticPathways, allSynthons = fragmentMolecule(Smiles_molNameTuple[0], SyntOnfragmentor, simTh=simTh)
+    """fsynthonsAfterOneCut = getShortestSyntheticPathways(allSyntheticPathways)
+    shortestSynthesis = findShortestSynthPathWithAvailableSynthLib(fsynthonsAfterOneCut, showAll=False,
+                                                                firstLaunch=True)"""
+    if allSyntheticPathways and len(allSyntheticPathways) > 1:
+        CompletePath = False
+        leafsComb = getLongestSyntheticPathways(allSyntheticPathways)
+        reconstructedMols = {} #set()
+        for comb in leafsComb:
+            if comb.availabilityRate == 1.0:
+                CompletePath = True
+            if "MR" in comb.name:
+                continue
+            synthonsDict, SynthonsForAnaloguesSynthesisLocal, globBbAnalogues = comb.getSynthonsForAnaloguesGeneration(SyntOnfragmentor.SynthLib,
+                                                            simTh, strictAvailabilityMode = strictAvailabilityMode)
+            print("synthons", synthonsDict)
+            print("SynthonsForAnaloguesSynthesis", SynthonsForAnaloguesSynthesisLocal)
+            if synthonsDict and SynthonsForAnaloguesSynthesisLocal:
+                print("True")
+                print("combname", comb.name)
+                
+                outdict[comb.name] = SynthonsForAnaloguesSynthesisLocal
+                reactionsUsedInFragmentationReactions = [rid.split("_")[0] for rid in comb.name.split("|")]
+                print("RXNs used:", reactionsUsedInFragmentationReactions)
+                reactionForReconstruction, reactionIds = SyntOnfragmentor.getReactionForReconstruction(reactionsUsedInFragmentationReactions)
+                print("RXNS:", reactionForReconstruction, reactionIds)
+                # print("global bbAnalogues", globBbAnalogues)
+                enumerator = enumeration(outDir=outDir, Synthons=synthonsDict,
+                                                reactionSMARTS=reactionForReconstruction, bbAnalogues=globBbAnalogues, maxNumberOfReactedSynthons=len(synthonsDict),
+                                                desiredNumberOfNewMols=desiredNumberOfNewMols, nCores=1, analoguesEnumeration=True, reactionIds = reactionIds)
+                #reconstructedMols.update(enumerator.newAnaloguesGeneration())
+                reconstructedMols.update(enumerator.AnaloguesGeneration())
+                if len(reconstructedMols)>=desiredNumberOfNewMols:
+                    break
+                #print(comb.name)
+        if not CompletePath:
+            synthonsAfterOneCut = getShortestSyntheticPathways(allSyntheticPathways)
+            shortestSynthesis = findShortestSynthPathWithAvailableBBlib(synthonsAfterOneCut, showAll=False,
+                                                                        firstLaunch=True)
+            for comb in shortestSynthesis:
                 if comb.availabilityRate == 1.0:
-                    CompletePath = True
-                if "MR" in comb.name:
-                    continue
-                synthonsDict, SynthonsForAnaloguesSynthesisLocal = comb.getSynthonsForAnaloguesGeneration(SyntOnfragmentor.SynthLib,
-                                                             simTh, strictAvailabilityMode = strictAvailabilityMode)
-                if synthonsDict and SynthonsForAnaloguesSynthesisLocal:
-                    outSynthons.write("****************************************** " + comb.name + " ******************************************\n")
-                    outSynthons.writelines(SynthonsForAnaloguesSynthesisLocal)
-                    reactionsUsedInFragmentationReactions = [rid.split("_")[0] for rid in comb.name.split("|")]
-                    reactionForReconstruction = SyntOnfragmentor.getReactionForReconstruction(reactionsUsedInFragmentationReactions)
-                    enumerator = enumeration(outDir=outDir, Synthons=synthonsDict,
-                                                   reactionSMARTS=reactionForReconstruction, maxNumberOfReactedSynthons=len(synthonsDict),
-                                                   desiredNumberOfNewMols=desiredNumberOfNewMols, nCores=1, analoguesEnumeration=True)
-                    #reconstructedMols.update(enumerator.newAnaloguesGeneration())
-                    reconstructedMols.update(enumerator.AnaloguesGeneration())
-                    if len(reconstructedMols)>=desiredNumberOfNewMols:
-                        break
-                    #print(comb.name)
-            if not CompletePath:
-                synthonsAfterOneCut = getShortestSyntheticPathways(allSyntheticPathways)
-                shortestSynthesis = findShortestSynthPathWithAvailableBBlib(synthonsAfterOneCut, showAll=False,
-                                                                            firstLaunch=True)
-                for comb in shortestSynthesis:
-                    if comb.availabilityRate == 1.0:
-                        if "MR" in comb.name:
-                            continue
-                        #comb.printDetailedReagentsSetInfo()
-                        synthonsDict, SynthonsForAnaloguesSynthesisLocal = comb.getSynthonsForAnaloguesGeneration(
-                            SyntOnfragmentor.SynthLib, simTh, strictAvailabilityMode=strictAvailabilityMode)
-                        #comb.printDetailedReagentsSetInfo()
-                        if synthonsDict and SynthonsForAnaloguesSynthesisLocal:
-                            outSynthons.write(
-                                "****************************************** " + comb.name + " ******************************************\n")
-                            outSynthons.writelines(SynthonsForAnaloguesSynthesisLocal)
-                            reactionsUsedInFragmentationReactions = [rid.split("_")[0] for rid in comb.name.split("|")]
-                            reactionForReconstruction = SyntOnfragmentor.getReactionForReconstruction(
-                                reactionsUsedInFragmentationReactions)
-                            enumerator = enumeration(outDir=outDir, Synthons=synthonsDict,
-                                                           reactionSMARTS=reactionForReconstruction,
-                                                           maxNumberOfReactedSynthons=len(synthonsDict),
-                                                           desiredNumberOfNewMols=1000000, nCores=1,
-                                                           analoguesEnumeration=True)
-                            # reconstructedMols.update(enumerator.newAnaloguesGeneration())
-                            reconstructedMols.update(enumerator.AnaloguesGeneration())
+                    if "MR" in comb.name:
+                        continue
+                    #comb.printDetailedReagentsSetInfo()
+                    synthonsDict, SynthonsForAnaloguesSynthesisLocal = comb.getSynthonsForAnaloguesGeneration(
+                        SyntOnfragmentor.SynthLib, simTh, strictAvailabilityMode=strictAvailabilityMode)
+                    #comb.printDetailedReagentsSetInfo()
+                    if synthonsDict and SynthonsForAnaloguesSynthesisLocal:
+                        outdict[comb.name] = SynthonsForAnaloguesSynthesisLocal
+                        
+                        reactionsUsedInFragmentationReactions = [rid.split("_")[0] for rid in comb.name.split("|")]
+                        reactionForReconstruction = SyntOnfragmentor.getReactionForReconstruction(
+                            reactionsUsedInFragmentationReactions)
+                        enumerator = enumeration(outDir=outDir, Synthons=synthonsDict,
+                                                        reactionSMARTS=reactionForReconstruction,
+                                                        maxNumberOfReactedSynthons=len(synthonsDict),
+                                                        desiredNumberOfNewMols=1000000, nCores=1,
+                                                        analoguesEnumeration=True)
+                        # reconstructedMols.update(enumerator.newAnaloguesGeneration())
+                        reconstructedMols.update(enumerator.AnaloguesGeneration())
 
             with open(os.path.join(outDir, "AnalogsForMol" + str(Smiles_molNameTuple[1]) + ".smi"), "w") as out:
-                for recMolsSmiles in reconstructedMols:
-                    out.write(recMolsSmiles + "\n")
+                for recMolsSmiles in reconstructedMols.keys():
+                    out.write(recMolsSmiles + " " + reconstructedMols[recMolsSmiles] + "\n")
+    
+    with open(os.path.join(outDir, "SynthonsForAnalogsGenerationForMol" + str(Smiles_molNameTuple[1]) + ".smi"), "w") as outSynthons:
+        for comb in outdict:
+            outSynthons.write("****************************************** " + comb + " ******************************************\n")
+            outSynthons.writelines(SynthonsForAnaloguesSynthesisLocal)
+        
+                    
 
 def findShortestSynthPathWithAvailableBBlib(firstSynthons:list, allCombSynthons = None, firstLaunch=True, showAll=True):
     max_rec = 0x100000
