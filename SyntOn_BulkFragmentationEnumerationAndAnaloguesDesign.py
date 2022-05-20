@@ -26,7 +26,7 @@ from src.SyntOn import *
 def main(inp, inp2, SynthLibrary, outDir, simTh, strictAvailabilityMode, nCores=-1, analoguesLibGen=False,
          Ro2Filtration=False, fragmentationMode="use_all", reactionsToWorkWith = "R1-R13", MaxNumberOfStages=5,
          maxNumberOfReactionCentersPerFragment=3, desiredNumberOfNewMols = 1000, enumerationMode=False, MWupperTh=1000,
-         MWlowerTh=100):
+         MWlowerTh=100, parsedSynthLib = False):
 
     SmilesToIgnore = ["*C(C)C", "*C(=O)C", "*C=O", "*[V]C=O", "*[V]C(C)C", "*[V]C(=O)C"]
     if simTh == -1:
@@ -36,7 +36,7 @@ def main(inp, inp2, SynthLibrary, outDir, simTh, strictAvailabilityMode, nCores=
     SyntOnfragmentor = fragmentation(fragmentationMode=fragmentationMode, reactionsToWorkWith=reactionsToWorkWith,
                     maxNumberOfReactionCentersPerFragment=maxNumberOfReactionCentersPerFragment,
                     MaxNumberOfStages = MaxNumberOfStages, FragmentsToIgnore=SmilesToIgnore,
-                    SynthLibrary=SynthLibrary, FindAnaloguesOfMissingSynthons=simBBselection,
+                    SynthLibrary=SynthLibrary, FindAnaloguesOfMissingSynthons=simBBselection, parsedSynthLib=parsedSynthLib,
                     Ro2SynthonsFiltration=Ro2Filtration)
     if analoguesLibGen and nCores==-1:
         for molNumb, line in enumerate(open(inp)):
@@ -54,7 +54,7 @@ def main(inp, inp2, SynthLibrary, outDir, simTh, strictAvailabilityMode, nCores=
         fixed_analogsGenerationFunction = partial(analoguesLibraryGeneration, outDir=outDir, simTh=simTh,
                              SyntOnfragmentor=SyntOnfragmentor, strictAvailabilityMode=strictAvailabilityMode,
                                                   desiredNumberOfNewMols=desiredNumberOfNewMols)
-        nCores = args.nCores
+        
         finalLog = []
         with ProcessPoolExecutor(max_workers=nCores) as executor:
             # try:
